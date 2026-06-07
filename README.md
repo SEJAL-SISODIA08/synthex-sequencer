@@ -19,6 +19,7 @@ A browser-based polyphonic step sequencer built with vanilla JavaScript and the 
 - Vanilla JavaScript
 - Web Audio API
 
+
 ## ⚙️ How to Run Locally
 1. Clone this repository
 2. Open `index.html` in Chrome or Firefox
