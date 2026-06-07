@@ -14,7 +14,6 @@
 
   <div class="app-wrapper">
 
-    <!-- HEADER -->
     <header class="app-header">
       <div class="header-left">
         <span class="logo-badge">SX-16</span>
@@ -29,7 +28,6 @@
       </div>
     </header>
 
-    <!-- VISUALIZER -->
     <section class="visualizer-section">
       <div class="visualizer-label">OSC · WAVEFORM MONITOR</div>
       <canvas id="visualizerCanvas" class="visualizer-canvas"></canvas>
@@ -39,9 +37,7 @@
       <div class="visualizer-corner br"></div>
     </section>
 
-    <!-- CONTROLS -->
     <section class="controls-section">
-
       <div class="control-group">
         <label class="ctrl-label" for="volumeSlider">
           <span class="ctrl-icon">▶</span> VOLUME
@@ -75,22 +71,16 @@
           <span class="select-arrow">▾</span>
         </div>
       </div>
-
     </section>
 
-    <!-- SEQUENCER GRID -->
     <section class="sequencer-section">
       <div class="grid-header">
         <div class="grid-header-label">STEP MATRIX · 4 VOICES × 16 STEPS</div>
         <div class="beat-numbers" id="beatNumbers"></div>
       </div>
-
-      <div class="grid-body" id="gridBody">
-        <!-- Rows injected by JS -->
-      </div>
+      <div class="grid-body" id="gridBody"></div>
     </section>
 
-    <!-- TRANSPORT -->
     <section class="transport-section">
       <div class="transport-inner">
         <button class="transport-btn" id="playStopBtn">
@@ -107,267 +97,8 @@
       <span>SYNTHEX SX-16 · WEB AUDIO ENGINE · © 2025</span>
     </footer>
 
-  </div><!-- end app-wrapper -->
+  </div>
 
-<script>
-// ── CONFIG ──────────────────────────────────────────────
-const ROWS = 4;
-const STEPS = 16;
-const ROW_NOTES = [
-  { label: 'KICK',  freq: 80  },
-  { label: 'SNARE', freq: 220 },
-  { label: 'HI-HAT',freq: 880 },
-  { label: 'LEAD',  freq: 440 },
-];
-const ROW_COLORS = ['--color-kick', '--color-snare', '--color-hat', '--color-lead'];
-
-// ── STATE ────────────────────────────────────────────────
-let isPlaying = false;
-let currentStep = 0;
-let scheduleTimer = null;
-let audioCtx = null;
-let analyser = null;
-let masterGain = null;
-let animFrameId = null;
-
-// Grid: grid[row][step] = true/false
-const grid = Array.from({ length: ROWS }, () => Array(STEPS).fill(false));
-
-// ── DOM REFS ─────────────────────────────────────────────
-const playStopBtn = document.getElementById('playStopBtn');
-const btnIcon     = document.getElementById('btnIcon');
-const btnText     = document.getElementById('btnText');
-const statusDot   = document.getElementById('statusDot');
-const statusLabel = document.getElementById('statusLabel');
-const stepCounter = document.getElementById('stepCounter');
-const volumeSlider= document.getElementById('volumeSlider');
-const tempoSlider = document.getElementById('tempoSlider');
-const volumeVal   = document.getElementById('volumeVal');
-const tempoVal    = document.getElementById('tempoVal');
-const waveformSel = document.getElementById('waveformSelect');
-const canvas      = document.getElementById('visualizerCanvas');
-const ctx2d       = canvas.getContext('2d');
-
-// ── BUILD BEAT NUMBERS ───────────────────────────────────
-const beatNumbers = document.getElementById('beatNumbers');
-for (let s = 0; s < STEPS; s++) {
-  const n = document.createElement('span');
-  n.className = 'beat-num';
-  n.textContent = s + 1;
-  beatNumbers.appendChild(n);
-}
-
-// ── BUILD GRID ───────────────────────────────────────────
-const gridBody = document.getElementById('gridBody');
-const stepButtons = []; // stepButtons[row][step]
-
-ROW_NOTES.forEach((note, row) => {
-  const rowEl = document.createElement('div');
-  rowEl.className = 'grid-row';
-  rowEl.dataset.row = row;
-
-  const rowLabel = document.createElement('div');
-  rowLabel.className = 'row-label';
-  rowLabel.innerHTML = `<span class="row-name">${note.label}</span><span class="row-freq">${note.freq}Hz</span>`;
-  rowEl.appendChild(rowLabel);
-
-  const stepsWrap = document.createElement('div');
-  stepsWrap.className = 'row-steps';
-
-  stepButtons[row] = [];
-  for (let s = 0; s < STEPS; s++) {
-    const btn = document.createElement('button');
-    btn.className = 'step-btn';
-    btn.dataset.row  = row;
-    btn.dataset.step = s;
-    btn.setAttribute('aria-label', `Row ${row+1} Step ${s+1}`);
-    // group divider every 4
-    if (s > 0 && s % 4 === 0) btn.classList.add('group-start');
-    btn.addEventListener('click', () => toggleStep(row, s, btn));
-    stepsWrap.appendChild(btn);
-    stepButtons[row][s] = btn;
-  }
-
-  rowEl.appendChild(stepsWrap);
-  gridBody.appendChild(rowEl);
-});
-
-function toggleStep(row, step, btn) {
-  grid[row][step] = !grid[row][step];
-  btn.classList.toggle('active', grid[row][step]);
-}
-
-// ── CONTROLS ─────────────────────────────────────────────
-volumeSlider.addEventListener('input', () => {
-  volumeVal.textContent = volumeSlider.value;
-  if (masterGain) masterGain.gain.setTargetAtTime(volumeSlider.value / 100, audioCtx.currentTime, 0.01);
-});
-
-tempoSlider.addEventListener('input', () => {
-  tempoVal.innerHTML = tempoSlider.value + ' <small>BPM</small>';
-});
-
-// ── AUDIO INIT ────────────────────────────────────────────
-function initAudio() {
-  if (audioCtx) return;
-  audioCtx  = new (window.AudioContext || window.webkitAudioContext)();
-  analyser  = audioCtx.createAnalyser();
-  analyser.fftSize = 2048;
-  masterGain = audioCtx.createGain();
-  masterGain.gain.value = volumeSlider.value / 100;
-  masterGain.connect(analyser);
-  analyser.connect(audioCtx.destination);
-}
-
-// ── PLAY NOTE ─────────────────────────────────────────────
-function playNote(freq, time) {
-  const osc  = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
-  osc.type      = waveformSel.value;
-  osc.frequency.setValueAtTime(freq, time);
-  gain.gain.setValueAtTime(0.35, time);
-  gain.gain.exponentialRampToValueAtTime(0.001, time + 0.18);
-  osc.connect(gain);
-  gain.connect(masterGain);
-  osc.start(time);
-  osc.stop(time + 0.2);
-}
-
-// ── SEQUENCER LOOP ────────────────────────────────────────
-function getStepInterval() {
-  return 60 / parseInt(tempoSlider.value) / 4; // 16th notes
-}
-
-function scheduleStep() {
-  if (!isPlaying) return;
-  // Highlight current step
-  highlightStep(currentStep);
-
-  // Fire active buttons
-  ROW_NOTES.forEach((note, row) => {
-    if (grid[row][currentStep]) {
-      playNote(note.freq, audioCtx.currentTime);
-    }
-  });
-
-  stepCounter.textContent = String(currentStep + 1).padStart(2, '0');
-  currentStep = (currentStep + 1) % STEPS;
-  scheduleTimer = setTimeout(scheduleStep, getStepInterval() * 1000);
-}
-
-function highlightStep(step) {
-  // Remove previous playhead
-  document.querySelectorAll('.step-btn.playing').forEach(b => b.classList.remove('playing'));
-  for (let r = 0; r < ROWS; r++) {
-    stepButtons[r][step].classList.add('playing');
-  }
-}
-
-// ── PLAY / STOP ───────────────────────────────────────────
-playStopBtn.addEventListener('click', () => {
-  if (isPlaying) {
-    stopSequencer();
-  } else {
-    startSequencer();
-  }
-});
-
-function startSequencer() {
-  initAudio();
-  if (audioCtx.state === 'suspended') audioCtx.resume();
-  isPlaying    = true;
-  currentStep  = 0;
-  playStopBtn.classList.add('playing');
-  btnIcon.textContent  = '■';
-  btnText.textContent  = 'STOP';
-  statusDot.classList.add('active');
-  statusLabel.textContent = 'PLAYING';
-  scheduleStep();
-  drawVisualizer();
-}
-
-function stopSequencer() {
-  isPlaying = false;
-  clearTimeout(scheduleTimer);
-  cancelAnimationFrame(animFrameId);
-  playStopBtn.classList.remove('playing');
-  btnIcon.textContent  = '▶';
-  btnText.textContent  = 'PLAY';
-  statusDot.classList.remove('active');
-  statusLabel.textContent = 'STOPPED';
-  stepCounter.textContent = '--';
-  document.querySelectorAll('.step-btn.playing').forEach(b => b.classList.remove('playing'));
-  clearCanvas();
-}
-
-// ── VISUALIZER ────────────────────────────────────────────
-function resizeCanvas() {
-  canvas.width  = canvas.offsetWidth;
-  canvas.height = canvas.offsetHeight;
-}
-window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
-
-function clearCanvas() {
-  ctx2d.clearRect(0, 0, canvas.width, canvas.height);
-  ctx2d.fillStyle = 'rgba(0,0,0,0)';
-  ctx2d.fillRect(0, 0, canvas.width, canvas.height);
-  // draw idle flat line
-  ctx2d.beginPath();
-  ctx2d.strokeStyle = 'rgba(0,255,136,0.18)';
-  ctx2d.lineWidth = 1.5;
-  ctx2d.moveTo(0, canvas.height / 2);
-  ctx2d.lineTo(canvas.width, canvas.height / 2);
-  ctx2d.stroke();
-}
-clearCanvas();
-
-function drawVisualizer() {
-  if (!isPlaying) return;
-  animFrameId = requestAnimationFrame(drawVisualizer);
-
-  const bufferLen = analyser.fftSize;
-  const dataArray = new Float32Array(bufferLen);
-  analyser.getFloatTimeDomainData(dataArray);
-
-  ctx2d.clearRect(0, 0, canvas.width, canvas.height);
-
-  // subtle grid lines
-  ctx2d.strokeStyle = 'rgba(0,255,136,0.05)';
-  ctx2d.lineWidth = 1;
-  for (let i = 1; i < 4; i++) {
-    const y = (canvas.height / 4) * i;
-    ctx2d.beginPath();
-    ctx2d.moveTo(0, y);
-    ctx2d.lineTo(canvas.width, y);
-    ctx2d.stroke();
-  }
-
-  // waveform
-  const gradient = ctx2d.createLinearGradient(0, 0, canvas.width, 0);
-  gradient.addColorStop(0,   '#00ff88');
-  gradient.addColorStop(0.5, '#00e5ff');
-  gradient.addColorStop(1,   '#00ff88');
-
-  ctx2d.lineWidth   = 2;
-  ctx2d.strokeStyle = gradient;
-  ctx2d.shadowBlur  = 14;
-  ctx2d.shadowColor = '#00ff88';
-  ctx2d.beginPath();
-
-  const sliceW = canvas.width / bufferLen;
-  let x = 0;
-  for (let i = 0; i < bufferLen; i++) {
-    const v = dataArray[i];
-    const y = (canvas.height / 2) + v * (canvas.height * 0.42);
-    if (i === 0) ctx2d.moveTo(x, y);
-    else         ctx2d.lineTo(x, y);
-    x += sliceW;
-  }
-  ctx2d.stroke();
-  ctx2d.shadowBlur = 0;
-}
-</script>
-
+  <script src="script.js"></script>
 </body>
 </html>
