@@ -3,6 +3,7 @@
 
 A browser-based polyphonic step sequencer built with vanilla JavaScript and the Web Audio API.
 
+
 ## 🎵 Live Demo
 [Launch Sequencer →](https://sejal-sisodia08.github.io/synthex-sequencer)
 
